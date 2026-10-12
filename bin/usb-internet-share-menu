@@ -7,8 +7,8 @@ if [[ ! -x "$CLI" ]]; then
     CLI="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/usb-internet-share"
 fi
 
-echo "USB Internet Share"
-echo "------------------"
+echo "OmaNet"
+echo "------"
 echo "1) Start sharing"
 echo "2) Stop sharing"
 echo "3) Check status"

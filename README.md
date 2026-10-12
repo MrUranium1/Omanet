@@ -1,4 +1,4 @@
-# USB Internet Share
+# OmaNet
 
 A lightweight Linux utility and Omarchy bar plugin for sharing a laptop's internet connection with an Android phone over USB using [GNirehtet](https://github.com/Genymobile/gnirehtet).
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=USB Internet Share via GNirehtet
+Description=OmaNet via GNirehtet
 After=default.target
 
 [Service]

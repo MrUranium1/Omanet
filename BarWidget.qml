@@ -111,7 +111,7 @@ BarWidget {
         bar: root.bar
         text: "\uf287"
         active: root.sharing
-        tooltipText: "USB Internet Share — " + root.stateLabel()
+        tooltipText: "OmaNet — " + root.stateLabel()
 
         onPressed: function(mouseButton) {
             if (!root.shareService)
@@ -152,7 +152,7 @@ BarWidget {
             PanelHero {
                 width: parent.width
                 foreground: root.fg
-                title: "USB Internet Share"
+                title: "OmaNet"
                 meta: "GNirehtet · reverse tethering"
                 detail: root.sharing ? "ON" : "OFF"
 

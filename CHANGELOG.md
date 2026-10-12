@@ -8,6 +8,7 @@
 - Added mocked dependency tests (`tests/dependencies.sh`) that never install real packages.
 
 ### Changed
+- Standardized the user-facing product name to OmaNet (bar widget title and tooltip, CLI menu heading, installer/uninstaller messages, desktop entry, systemd unit description, README title, and plugin display name). Internal identifiers are unchanged: the plugin id, CLI command names, systemd service name, and install paths are all retained for backward compatibility.
 - Reworked internet sharing to use GNirehtet for Android reverse tethering.
 - Use a user-level systemd service to manage the GNirehtet process.
 - Provide a command-line interface to start, stop, and check sharing status.

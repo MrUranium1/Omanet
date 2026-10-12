@@ -17,5 +17,5 @@ rm -f \
 systemctl --user daemon-reload
 systemctl --user reset-failed usb-internet-share.service 2>/dev/null || true
 
-echo "USB Internet Share removed for $USER."
+echo "OmaNet removed for $USER."
 echo "GNirehtet itself was not uninstalled."

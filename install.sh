@@ -29,7 +29,7 @@ mkdir -p "$HOME/.local/share/applications"
 cat > "$HOME/.local/share/applications/usb-internet-share.desktop" <<EOF_DESKTOP
 [Desktop Entry]
 Type=Application
-Name=USB Internet Share
+Name=OmaNet
 Comment=Share laptop internet with an Android phone over USB
 Exec=$HOME/.local/bin/usb-internet-share-menu
 Terminal=true
@@ -38,7 +38,7 @@ EOF_DESKTOP
 
 systemctl --user daemon-reload
 
-echo "USB Internet Share installed for $USER."
+echo "OmaNet installed for $USER."
 echo "Start with: usb-internet-share start"
 echo "Stop with:  usb-internet-share stop"
 echo "Status with: usb-internet-share status"

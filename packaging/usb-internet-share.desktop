@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=USB Internet Share
+Name=OmaNet
 Comment=Launch the USB internet sharing menu
 Exec=usb-internet-share-menu
 Icon=network-wired
