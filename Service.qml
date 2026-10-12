@@ -8,9 +8,28 @@ Item {
     property var shell: null
     property bool sharingActive: false
     property string serviceState: "unknown"
+    property bool needsSetup: false
+    property string omarchyPath: Quickshell.env("OMARCHY_PATH")
+
+    readonly property string setupScript:
+        Qt.resolvedUrl("scripts/plugin-setup.sh").toString().replace("file://", "")
+
+    readonly property string launchTerminal:
+        (omarchyPath !== "" ? omarchyPath : "/usr/share/omarchy") + "/bin/omarchy-launch-terminal"
 
     function refreshStatus() {
         statusProcess.running = true
+    }
+
+    function checkSetup() {
+        setupCheck.running = true
+    }
+
+    function runSetup() {
+        if (setupScript === "")
+            return false
+        Quickshell.execDetached([launchTerminal, setupScript])
+        return true
     }
 
     function start() {
@@ -25,6 +44,15 @@ Item {
 
     function status(): string {
         return serviceState
+    }
+
+    Process {
+        id: setupCheck
+        command: ["bash", "-lc", "command -v gnirehtet >/dev/null 2>&1 && [ -f \"$HOME/.config/systemd/user/usb-internet-share.service\" ] && echo ok || echo missing"]
+
+        stdout: StdioCollector {
+            onStreamFinished: root.needsSetup = (text.trim() !== "ok")
+        }
     }
 
     Process {
@@ -68,7 +96,10 @@ Item {
         running: true
         repeat: true
         triggeredOnStart: true
-        onTriggered: root.refreshStatus()
+        onTriggered: {
+            root.refreshStatus()
+            root.checkSetup()
+        }
     }
 
     IpcHandler {
@@ -76,6 +107,14 @@ Item {
 
         function status(): string {
             return root.status()
+        }
+
+        function needsSetup(): bool {
+            return root.needsSetup
+        }
+
+        function setup(): string {
+            return root.runSetup() ? "ok" : "unavailable"
         }
 
         function start(): string {

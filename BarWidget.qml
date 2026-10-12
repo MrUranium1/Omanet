@@ -17,11 +17,18 @@ BarWidget {
     readonly property string serviceState:
         shareService ? String(shareService.serviceState || "unknown") : "unknown"
 
+    readonly property bool needsSetup:
+        shareService ? shareService.needsSetup === true : false
+
     readonly property bool busy:
         serviceState === "activating" || serviceState === "deactivating"
 
     readonly property color fg: bar ? bar.foreground : Commons.Color.foreground
     readonly property color accent: Commons.Color.accent
+
+    readonly property color iconColor:
+        needsSetup ? Commons.Color.urgent
+                   : (sharing ? fg : Qt.darker(fg, 1.7))
 
     property bool popupOpen: false
 
@@ -36,6 +43,12 @@ BarWidget {
             shareService.stop()
         else
             shareService.start()
+    }
+
+    function installDependencies() {
+        if (shareService && typeof shareService.runSetup === "function")
+            shareService.runSetup()
+        popupOpen = false
     }
 
     function stateLabel() {
@@ -110,13 +123,20 @@ BarWidget {
         id: button
         anchors.fill: parent
         bar: root.bar
-        text: "\uf287"
-        active: root.sharing
-        activeColor: root.fg
-        foreground: root.sharing ? root.fg : Qt.darker(root.fg, 1.7)
-        tooltipText: "OmaNet — " + root.stateLabel()
+        text: root.needsSetup ? "\uf071" : "\uf287"
+        active: root.sharing || root.needsSetup
+        activeColor: root.needsSetup ? Commons.Color.urgent : root.fg
+        foreground: root.iconColor
+        tooltipText: root.needsSetup
+            ? "OmaNet — GNirehtet not installed (click to set up)"
+            : "OmaNet — " + root.stateLabel()
 
         onPressed: function(mouseButton) {
+            if (root.needsSetup) {
+                root.installDependencies()
+                return
+            }
+
             if (!root.shareService)
                 return
 
@@ -157,7 +177,7 @@ BarWidget {
                 foreground: root.fg
                 title: "OmaNet"
                 meta: "GNirehtet · reverse tethering"
-                detail: root.sharing ? "ON" : "OFF"
+                detail: root.needsSetup ? "SET UP" : (root.sharing ? "ON" : "OFF")
 
                 iconComponent: Component {
                     Text {
@@ -192,16 +212,20 @@ BarWidget {
                 bordered: true
                 selected: root.sharing
                 foreground: root.fg
-                iconText: root.sharing ? "\uf04d" : "\uf04b"
-                text: root.busy
-                    ? (root.sharing ? "Stopping…" : "Starting…")
-                    : (root.sharing ? "Stop sharing" : "Start sharing")
-                enabled: !root.busy
+                iconText: root.needsSetup ? "\uf019" : (root.sharing ? "\uf04d" : "\uf04b")
+                text: root.needsSetup
+                    ? "Install GNirehtet"
+                    : (root.busy
+                        ? (root.sharing ? "Stopping…" : "Starting…")
+                        : (root.sharing ? "Stop sharing" : "Start sharing"))
+                enabled: root.needsSetup ? true : !root.busy
                 opacity: enabled ? 1.0 : 0.55
-                tooltipText: root.sharing
-                    ? "Stop sharing internet to the connected device"
-                    : "Start sharing internet to the connected device"
-                onClicked: root.toggle()
+                tooltipText: root.needsSetup
+                    ? "Open a terminal to install GNirehtet and set up the service"
+                    : (root.sharing
+                        ? "Stop sharing internet to the connected device"
+                        : "Start sharing internet to the connected device")
+                onClicked: root.needsSetup ? root.installDependencies() : root.toggle()
             }
 
             PanelSeparator {
@@ -219,11 +243,20 @@ BarWidget {
 
                 StatusRow {
                     foreground: root.fg
+                    label: "Setup"
+                    value: root.needsSetup ? "Required" : "Complete"
+                    dot: root.needsSetup ? Commons.Color.urgent : root.accent
+                }
+
+                StatusRow {
+                    foreground: root.fg
                     label: "Service"
-                    value: root.stateLabel()
-                    dot: root.sharing
-                        ? root.accent
-                        : (root.serviceState === "failed" ? Commons.Color.urgent : Qt.darker(root.fg, 1.6))
+                    value: root.needsSetup ? "Not installed" : root.stateLabel()
+                    dot: root.needsSetup
+                        ? Commons.Color.urgent
+                        : (root.sharing
+                            ? root.accent
+                            : (root.serviceState === "failed" ? Commons.Color.urgent : Qt.darker(root.fg, 1.6)))
                 }
 
                 StatusRow {
