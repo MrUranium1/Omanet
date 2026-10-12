@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+- Added `scripts/install-dependencies.sh`, which checks for GNirehtet and ADB, detects the system package manager, and offers to install missing dependencies only after explicit consent.
+- `install.sh` now runs the dependency check during installation.
+- Added mocked dependency tests (`tests/dependencies.sh`) that never install real packages.
+
 ### Changed
 - Reworked internet sharing to use GNirehtet for Android reverse tethering.
 - Use a user-level systemd service to manage the GNirehtet process.

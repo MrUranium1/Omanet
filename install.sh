@@ -8,8 +8,8 @@ if (( EUID == 0 )); then
     exit 1
 fi
 
-if ! command -v gnirehtet >/dev/null 2>&1; then
-    echo "GNirehtet is missing. Install gnirehtet-bin first." >&2
+if ! "$ROOT/scripts/install-dependencies.sh"; then
+    echo "Dependency check failed; OmaNet was not installed." >&2
     exit 1
 fi
 

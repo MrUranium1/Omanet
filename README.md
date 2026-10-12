@@ -30,9 +30,26 @@ Clone or download this repository, then run the installer as your normal user, w
 ./install.sh
 ```
 
+OmaNet is currently distributed as a source checkout; there is no separate release archive. Keep the repository layout intact (in particular `scripts/install-dependencies.sh`), because `install.sh` invokes that script relative to its own location. The installer can be run from any working directory.
+
 The installer places the CLI commands in `~/.local/bin`, installs the user-level systemd service, and creates a desktop launcher.
 
 Make sure `~/.local/bin` is included in your `PATH`.
+
+### Dependencies
+
+Before installing, the installer runs `scripts/install-dependencies.sh`, which checks for GNirehtet and ADB. If either is missing it detects your package manager (pacman, apt-get, dnf, zypper, apk, or brew) and **asks for confirmation before installing anything**. Nothing is ever installed silently.
+
+- ADB is installed from your distribution's packages (`android-tools` or `adb`).
+- GNirehtet is only available automatically on Arch Linux, through the AUR package `gnirehtet-bin` (using `yay` or `paru` if present). Elsewhere, install it manually.
+
+If you decline, no supported package manager is found, or an install fails, the installer stops and prints the exact remaining steps. You can also run the check on its own:
+
+```bash
+./scripts/install-dependencies.sh
+```
+
+Pass `--yes` to skip the prompt when running unattended.
 
 ### Omarchy bar plugin
 

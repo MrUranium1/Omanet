@@ -18,6 +18,7 @@ for file in \
     "$CLI" \
     "$ROOT/bin/usb-internet-share-menu" \
     "$ROOT/install.sh" \
+    "$ROOT/scripts/install-dependencies.sh" \
     "$ROOT/uninstall.sh"
 do
     if bash -n "$file"; then

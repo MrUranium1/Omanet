@@ -18,11 +18,16 @@ jobs:
           bash -n bin/usb-internet-share
           bash -n bin/usb-internet-share-menu
           bash -n install.sh
+          bash -n scripts/install-dependencies.sh
           bash -n uninstall.sh
           bash -n tests/smoke.sh
+          bash -n tests/dependencies.sh
 
       - name: Run ShellCheck
-        run: shellcheck bin/usb-internet-share bin/usb-internet-share-menu install.sh uninstall.sh tests/smoke.sh
+        run: shellcheck bin/usb-internet-share bin/usb-internet-share-menu install.sh scripts/install-dependencies.sh uninstall.sh tests/smoke.sh tests/dependencies.sh
 
       - name: Run smoke tests
         run: bash tests/smoke.sh
+
+      - name: Run dependency tests
+        run: bash tests/dependencies.sh
