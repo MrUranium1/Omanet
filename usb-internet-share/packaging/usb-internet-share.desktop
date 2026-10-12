@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=USB Internet Share
+Comment=Toggle internet sharing to a USB-connected device
+Exec=usb-internet-share-menu
+Icon=network-wired
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=false
