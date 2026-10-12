@@ -8,11 +8,13 @@
 - Added mocked dependency tests (`tests/dependencies.sh`) that never install real packages.
 - Added a marketplace preview image (`preview.png`).
 - Added the `license` field (`MIT`) to `manifest.json`.
+- Added `scripts/plugin-setup.sh`, launched from the bar widget, which runs the installer in a terminal.
 
 ### Changed
 - Standardized the user-facing product name to OmaNet (bar widget title and tooltip, CLI menu heading, installer/uninstaller messages, desktop entry, systemd unit description, README title, and plugin display name). Internal identifiers are unchanged: the plugin id, CLI command names, systemd service name, and install paths are all retained for backward compatibility.
 - Rewrote the README: added a quick start, documented the bar-widget controls, expanded the Android setup steps, added a troubleshooting section, and documented the license.
 - Qualified the `qs.Commons` palette as `Commons.Color` in `BarWidget.qml` for Qt 6.12 compatibility.
+- The plugin now detects missing GNirehtet or service on load and offers a one-click guided setup from the bar widget, so adding the plugin is enough (no manual `install.sh`).
 - Reworked internet sharing to use GNirehtet for Android reverse tethering.
 - Use a user-level systemd service to manage the GNirehtet process.
 - Provide a command-line interface to start, stop, and check sharing status.

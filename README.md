@@ -13,13 +13,21 @@ computer's connection with the phone.
 ## Quick start
 
 ```bash
-./install.sh                                                                                      # install CLI + service
-omarchy plugin add https://github.com/MrUranium1/Omanet.git --enable                              # install the bar widget
-usb-internet-share start                                                                          # start sharing
+omarchy plugin add https://github.com/MrUranium1/Omanet.git --enable
 ```
 
-Then connect your phone, enable USB debugging, and approve the prompts (see
+Then click the **OmaNet** icon in the bar. If GNirehtet (or the service) is not
+installed yet, the icon shows a warning colour and clicking it opens a terminal
+that installs everything it needs. Once it is ready, click again to start
+sharing. Connect your phone, enable USB debugging, and approve the prompts (see
 [Android setup](#android-setup)).
+
+Prefer the command line? The same installer can be run directly:
+
+```bash
+./install.sh            # installs GNirehtet if needed, plus the CLI and service
+usb-internet-share start
+```
 
 ## Features
 
@@ -91,15 +99,19 @@ Pass `--yes` to skip the prompt for unattended installs.
 ### Omarchy bar plugin
 
 The bar widget is provided by `manifest.json`, `Service.qml`, and
-`BarWidget.qml`. Install the utility and service first (above), then add the
-plugin:
+`BarWidget.qml`. Add it with:
 
 ```bash
 omarchy plugin add https://github.com/MrUranium1/Omanet.git --enable
 ```
 
-The widget controls the installed `usb-internet-share.service`; installing the
-widget alone is not sufficient.
+`omarchy plugin add` only clones and enables the plugin — it cannot run an
+installer — so the widget checks its dependencies itself when it loads. If
+GNirehtet is missing, or the `usb-internet-share.service` has not been
+installed, the bar icon switches to a setup state (an exclamation marker in the
+warning colour). Clicking it opens a terminal that runs the installer, which
+installs GNirehtet if needed and sets up the CLI and service. No manual
+`./install.sh` is required.
 
 To remove it:
 
