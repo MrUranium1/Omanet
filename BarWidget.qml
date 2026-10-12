@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 BarWidget {
@@ -19,8 +20,8 @@ BarWidget {
     readonly property bool busy:
         serviceState === "activating" || serviceState === "deactivating"
 
-    readonly property color fg: bar ? bar.foreground : Color.foreground
-    readonly property color accent: Color.accent
+    readonly property color fg: bar ? bar.foreground : Commons.Color.foreground
+    readonly property color accent: Commons.Color.accent
 
     property bool popupOpen: false
 
@@ -61,7 +62,7 @@ BarWidget {
 
     component StatusRow: Item {
         id: row
-        property color foreground: Color.foreground
+        property color foreground: Commons.Color.foreground
         property color dot: foreground
         property string label: ""
         property string value: ""
@@ -222,7 +223,7 @@ BarWidget {
                     value: root.stateLabel()
                     dot: root.sharing
                         ? root.accent
-                        : (root.serviceState === "failed" ? Color.urgent : Qt.darker(root.fg, 1.6))
+                        : (root.serviceState === "failed" ? Commons.Color.urgent : Qt.darker(root.fg, 1.6))
                 }
 
                 StatusRow {

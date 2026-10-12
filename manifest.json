@@ -4,6 +4,7 @@
   "name": "OmaNet",
   "version": "0.1.0",
   "author": "Mehir",
+  "license": "MIT",
   "description": "Control Android USB reverse tethering through GNirehtet",
   "kinds": [
     "service",

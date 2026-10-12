@@ -55,9 +55,19 @@ Pass `--yes` to skip the prompt when running unattended.
 
 The Omarchy bar widget is provided by `manifest.json`, `Service.qml`, and `BarWidget.qml`.
 
-Install the utility and service first using the installer above. Then install the plugin through Omarchy's plugin manager once this repository is published and its Git URL is available.
+Install the utility and service first using the installer above. Then add the plugin:
+
+```bash
+omarchy plugin add https://github.com/MrUranium1/Omanet.git --enable
+```
 
 The widget relies on the installed `usb-internet-share.service`; installing the widget alone is not sufficient.
+
+To remove the plugin:
+
+```bash
+omarchy plugin remove mehir.usb-internet-share
+```
 
 ## Android setup
 
