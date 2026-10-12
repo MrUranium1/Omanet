@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CLI="$HOME/.local/bin/usb-internet-share"
+
+if [[ ! -x "$CLI" ]]; then
+    CLI="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/usb-internet-share"
+fi
+
+echo "USB Internet Share"
+echo "------------------"
+echo "1) Start sharing"
+echo "2) Stop sharing"
+echo "3) Check status"
+echo "4) Exit"
+read -rp "Choose an option: " choice
+
+case "$choice" in
+    1) "$CLI" start ;;
+    2) "$CLI" stop ;;
+    3) "$CLI" status ;;
+    4) exit 0 ;;
+    *) echo "Invalid choice."; exit 2 ;;
+esac

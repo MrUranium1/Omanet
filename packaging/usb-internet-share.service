@@ -1,0 +1,12 @@
+[Unit]
+Description=USB Internet Share via GNirehtet
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gnirehtet run
+ExecStop=/usr/bin/gnirehtet stop
+Restart=no
+
+[Install]
+WantedBy=default.target

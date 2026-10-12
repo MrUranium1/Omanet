@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=USB Internet Share
+Comment=Launch the USB internet sharing menu
+Exec=usb-internet-share-menu
+Icon=network-wired
+Terminal=true
+Categories=Network;Utility;
+StartupNotify=false

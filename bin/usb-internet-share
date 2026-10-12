@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP="usb-internet-share"
+SERVICE="usb-internet-share.service"
+
+usage() {
+    cat <<'HELP'
+Usage: usb-internet-share {start|stop|status|help}
+
+  start   Start USB internet sharing.
+  stop    Stop USB internet sharing.
+  status  Show the service status.
+  help    Show this help.
+HELP
+}
+
+case "${1:-help}" in
+    start)
+        systemctl --user start "$SERVICE"
+        systemctl --user --no-pager --full status "$SERVICE"
+        ;;
+    stop)
+        systemctl --user stop "$SERVICE"
+        echo "$APP: USB internet sharing stopped."
+        ;;
+    status)
+        systemctl --user --no-pager status "$SERVICE"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

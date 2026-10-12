@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Check Bash syntax
+        run: |
+          bash -n bin/usb-internet-share
+          bash -n bin/usb-internet-share-menu
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n tests/smoke.sh
+
+      - name: Run ShellCheck
+        run: shellcheck bin/usb-internet-share bin/usb-internet-share-menu install.sh uninstall.sh tests/smoke.sh
+
+      - name: Run smoke tests
+        run: bash tests/smoke.sh

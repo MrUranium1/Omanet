@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "mehir.usb-internet-share",
+  "name": "USB Internet Share",
+  "version": "0.1.0",
+  "author": "Mehir",
+  "description": "Control Android USB reverse tethering through GNirehtet",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "USB Internet Share",
+    "description": "Control USB internet sharing to Android",
+    "category": "Network",
+    "allowMultiple": false
+  }
+}
