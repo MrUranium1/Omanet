@@ -1,0 +1,563 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly APP=usb-internet-share
+readonly RUN_DIR=/run/usb-internet-share
+readonly STATE_FILE=/run/usb-internet-share/state
+readonly STATUS_FILE=/run/usb-internet-share.active
+readonly LOCK_FILE=/run/lock/usb-internet-share.lock
+readonly NFT_TABLE=usb_internet_share
+readonly SHARE_ADDRESS=10.203.0.1
+readonly SHARE_CIDR=10.203.0.1/24
+readonly SHARE_NETWORK=10.203.0.0/24
+readonly DHCP_START=10.203.0.10
+readonly DHCP_END=10.203.0.200
+readonly DNSMASQ_PIDFILE=$RUN_DIR/dnsmasq.pid
+SCRIPT_PATH=$(readlink -f "$0")
+readonly SCRIPT_PATH
+
+# The monitor ignores "no carrier" until the link has been seen up once, or
+# until this many 2-second ticks have passed (2 minutes), whichever is first.
+readonly MONITOR_GRACE_TICKS=60
+readonly MONITOR_DOWN_LIMIT=15
+
+USB_IFACE=
+UPSTREAM_IFACE=
+OLD_FORWARD=
+OLD_LINK_UP=
+OLD_NM_MANAGED=unknown
+DNSMASQ_PID=
+SESSION_ID=
+START_COMPLETE=0
+CLEANUP_FAILED=0
+
+fail() {
+  printf '%s: ERROR: %s\n' "$APP" "$*" >&2
+  exit 1
+}
+
+info() {
+  printf '%s: %s\n' "$APP" "$*"
+}
+
+warn() {
+  printf '%s: WARNING: %s\n' "$APP" "$*" >&2
+}
+
+usage() {
+  cat <<'EOF'
+Usage: usb-internet-share {start|stop|toggle|status|check|help}
+
+start   Configure USB-side IPv4, DHCP/DNS, forwarding, and NAT.
+stop    Remove this tool's firewall/DHCP setup and restore saved host settings.
+toggle  Start or stop sharing.
+status  Show whether sharing is active.
+check   Check dependencies and selected interfaces without changing the system.
+help    Show this help.
+
+Configuration: /etc/usb-internet-share.conf
+EOF
+}
+
+require_root() {
+  (( EUID == 0 )) || fail "this action needs administrator privileges; run with sudo or pkexec."
+}
+
+require_commands() {
+  local command
+  for command in ip nft dnsmasq sysctl flock readlink; do
+    command -v "$command" >/dev/null 2>&1 || fail "required command '$command' is missing. Install the documented dependencies."
+  done
+}
+
+valid_iface_name() {
+  [[ $1 =~ ^[[:alnum:]_.:-]{1,15}$ ]]
+}
+
+trim_space() {
+  local value=$1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+load_config() {
+  local config=/etc/usb-internet-share.conf line key value mode owner
+  [[ -e $config ]] || return 0
+  [[ -f $config && ! -L $config ]] || fail "$config must be a regular file, not a symlink."
+  owner=$(stat -c '%u' "$config") || fail "cannot inspect $config."
+  mode=$(stat -c '%a' "$config") || fail "cannot inspect permissions on $config."
+  [[ $owner == 0 ]] || fail "$config must be owned by root."
+  (( (8#$mode & 0022) == 0 )) || fail "$config must not be writable by group or others."
+
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line%%#*}
+    line=$(trim_space "$line")
+    [[ -z $line ]] && continue
+    [[ $line == *=* ]] || fail "invalid line in $config; use KEY=value."
+    key=$(trim_space "${line%%=*}")
+    value=$(trim_space "${line#*=}")
+    [[ $value != *"="* ]] || fail "invalid value for $key in $config."
+    case "$key" in
+      USB_IFACE) USB_IFACE=$value ;;
+      UPSTREAM_IFACE) UPSTREAM_IFACE=$value ;;
+      *) fail "unsupported setting '$key' in $config." ;;
+    esac
+    if [[ -n $value ]] && ! valid_iface_name "$value"; then
+      fail "invalid interface name '$value' in $config."
+    fi
+  done < "$config"
+}
+
+is_usb_netdev() {
+  local path
+  [[ -e /sys/class/net/"$1"/device ]] || return 1
+  path=$(readlink -f "/sys/class/net/$1/device") || return 1
+  [[ $path =~ /usb[0-9]+/ ]]
+}
+
+route_default_iface() {
+  ip -4 route show default | awk '
+    $1 == "default" {
+      for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }
+    }'
+}
+
+detect_usb_iface() {
+  local candidate path count=0 found=
+  for path in /sys/class/net/*; do
+    [[ -e $path ]] || continue
+    candidate=${path##*/}
+    [[ $candidate == lo || $candidate == "$UPSTREAM_IFACE" ]] && continue
+    if is_usb_netdev "$candidate"; then
+      found=$candidate
+      ((count += 1))
+    fi
+  done
+  if (( count == 0 )); then
+    fail "no USB network interface was found. Connect the phone in a mode that creates a USB network interface, or configure USB_IFACE."
+  elif (( count > 1 )); then
+    fail "found multiple USB network interfaces; set USB_IFACE in /etc/usb-internet-share.conf."
+  fi
+  USB_IFACE=$found
+}
+
+select_interfaces() {
+  if [[ -z $UPSTREAM_IFACE ]]; then
+    UPSTREAM_IFACE=$(route_default_iface)
+    [[ -n $UPSTREAM_IFACE ]] || fail "no IPv4 default route was found. Connect the laptop to the internet or set UPSTREAM_IFACE."
+  fi
+  valid_iface_name "$UPSTREAM_IFACE" || fail "invalid upstream interface name '$UPSTREAM_IFACE'."
+  ip link show dev "$UPSTREAM_IFACE" >/dev/null 2>&1 || fail "upstream interface '$UPSTREAM_IFACE' does not exist."
+  [[ -n $USB_IFACE ]] || detect_usb_iface
+  valid_iface_name "$USB_IFACE" || fail "invalid USB interface name '$USB_IFACE'."
+  ip link show dev "$USB_IFACE" >/dev/null 2>&1 || fail "USB interface '$USB_IFACE' does not exist."
+  is_usb_netdev "$USB_IFACE" || fail "'$USB_IFACE' does not appear to be a USB network interface; refusing to configure it."
+  [[ $USB_IFACE != "$UPSTREAM_IFACE" ]] || fail "USB and upstream interfaces must be different."
+}
+
+ipv4_to_int() {
+  local ip=$1 a b c d octet
+  IFS=. read -r a b c d <<< "${ip%%/*}"
+  for octet in "$a" "$b" "$c" "$d"; do
+    [[ $octet =~ ^[0-9]{1,3}$ ]] && (( 10#$octet <= 255 )) || return 1
+  done
+  printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
+}
+
+route_range() {
+  local route=$1 address prefix ip_num mask network
+  [[ $route =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] || return 1
+  address=${route%%/*}
+  prefix=32
+  [[ $route == */* ]] && prefix=${route##*/}
+  [[ $prefix =~ ^[0-9]{1,2}$ ]] || return 1
+  prefix=$((10#$prefix))
+  (( prefix >= 0 && prefix <= 32 )) || return 1
+  ip_num=$(ipv4_to_int "$address") || return 1
+  (( prefix == 0 )) && return 1
+  mask=$(( (0xffffffff << (32 - prefix)) & 0xffffffff ))
+  network=$(( ip_num & mask ))
+  printf '%u %u\n' "$network" "$((network | (0xffffffff ^ mask)))"
+}
+
+check_network_available() {
+  local local_addr target_start target_end route route_start route_end
+  read -r target_start target_end < <(route_range "$SHARE_NETWORK") || fail "internal error parsing the sharing network."
+
+  while read -r route _; do
+    [[ $route == default ]] && continue
+    read -r route_start route_end < <(route_range "$route") || continue
+    if (( target_start <= route_end && route_start <= target_end )); then
+      fail "sharing network $SHARE_NETWORK overlaps existing route $route; remove the conflict before starting."
+    fi
+  done < <(ip -4 route show table all)
+
+  local_addr=$(ip -4 -o addr show | awk '{print $4}')
+  while IFS= read -r route; do
+    [[ -z $route ]] && continue
+    local ip_num
+    ip_num=$(ipv4_to_int "$route") || continue
+    if (( ip_num >= target_start && ip_num <= target_end )); then
+      fail "sharing network $SHARE_NETWORK overlaps an address already assigned on this host ($route)."
+    fi
+  done <<< "$local_addr"
+}
+
+save_state() {
+  local temp=$RUN_DIR/state.new
+  {
+    printf 'USB_IFACE=%s\n' "$USB_IFACE"
+    printf 'UPSTREAM_IFACE=%s\n' "$UPSTREAM_IFACE"
+    printf 'OLD_FORWARD=%s\n' "$OLD_FORWARD"
+    printf 'OLD_LINK_UP=%s\n' "$OLD_LINK_UP"
+    printf 'OLD_NM_MANAGED=%s\n' "$OLD_NM_MANAGED"
+    printf 'DNSMASQ_PID=%s\n' "$DNSMASQ_PID"
+    printf 'SESSION_ID=%s\n' "$SESSION_ID"
+  } > "$temp"
+  chmod 0600 "$temp"
+  mv -f -- "$temp" "$STATE_FILE"
+}
+
+write_status() {
+  local value=$1 temp=$STATUS_FILE.new
+  [[ $value == starting || $value == active ]] || fail "invalid status value."
+  printf '%s\n' "$value" > "$temp"
+  chmod 0644 "$temp"
+  mv -f -- "$temp" "$STATUS_FILE"
+}
+
+read_state() {
+  local line key value owner mode
+  [[ -f $STATE_FILE && ! -L $STATE_FILE ]] || fail "state file is missing or invalid."
+  owner=$(stat -c '%u' "$STATE_FILE") || fail "cannot inspect saved state."
+  mode=$(stat -c '%a' "$STATE_FILE") || fail "cannot inspect saved state permissions."
+  [[ $owner == 0 && $mode == 600 ]] || fail "saved state has unexpected ownership or permissions; refusing to use it."
+  while IFS= read -r line; do
+    [[ $line == *=* ]] || fail "saved state is malformed."
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      USB_IFACE) USB_IFACE=$value ;;
+      UPSTREAM_IFACE) UPSTREAM_IFACE=$value ;;
+      OLD_FORWARD) OLD_FORWARD=$value ;;
+      OLD_LINK_UP) OLD_LINK_UP=$value ;;
+      OLD_NM_MANAGED) OLD_NM_MANAGED=$value ;;
+      DNSMASQ_PID) DNSMASQ_PID=$value ;;
+      SESSION_ID) SESSION_ID=$value ;;
+      *) fail "saved state has an unknown field; refusing to use it." ;;
+    esac
+  done < "$STATE_FILE"
+  if ! valid_iface_name "$USB_IFACE" || ! valid_iface_name "$UPSTREAM_IFACE"; then
+    fail "saved state contains an invalid interface."
+  fi
+  [[ $OLD_FORWARD == 0 || $OLD_FORWARD == 1 ]] || fail "saved forwarding state is invalid."
+  [[ $OLD_LINK_UP == 0 || $OLD_LINK_UP == 1 ]] || fail "saved link state is invalid."
+  [[ $OLD_NM_MANAGED == yes || $OLD_NM_MANAGED == no || $OLD_NM_MANAGED == unknown ]] || fail "saved NetworkManager state is invalid."
+  [[ -z $DNSMASQ_PID || $DNSMASQ_PID =~ ^[0-9]+$ ]] || fail "saved DHCP/DNS process ID is invalid."
+  [[ $SESSION_ID =~ ^[[:alnum:]-]{1,64}$ ]] || fail "saved session ID is invalid."
+}
+
+acquire_lock() {
+  mkdir -p /run/lock
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || fail "another start/stop operation is in progress."
+}
+
+stop_dnsmasq() {
+  local cmdline i
+  [[ $DNSMASQ_PID =~ ^[0-9]+$ ]] || return 0
+  [[ -r /proc/$DNSMASQ_PID/cmdline ]] || return 0
+  cmdline=$(tr '\0' ' ' < "/proc/$DNSMASQ_PID/cmdline") || return 0
+  [[ $cmdline == *"--pid-file=$DNSMASQ_PIDFILE"* ]] || {
+    warn "saved dnsmasq PID no longer belongs to this service; leaving it untouched."
+    return 0
+  }
+  if ! kill -TERM "$DNSMASQ_PID"; then
+    warn "could not stop this service's dnsmasq process."
+    CLEANUP_FAILED=1
+    return 0
+  fi
+  for ((i = 0; i < 30; i++)); do
+    [[ -e /proc/$DNSMASQ_PID ]] || return 0
+    sleep 0.1
+  done
+  warn "dnsmasq did not stop; retry cleanup after checking process $DNSMASQ_PID."
+  CLEANUP_FAILED=1
+}
+
+stop_locked() {
+  local current_forward
+  CLEANUP_FAILED=0
+  read_state
+
+  stop_dnsmasq
+
+  if ! command -v nft >/dev/null 2>&1; then
+    warn "nft is unavailable; cannot verify or remove the forwarding rules."
+    CLEANUP_FAILED=1
+  elif ! nft list ruleset >/dev/null 2>&1; then
+    warn "nft could not inspect the firewall; keeping saved state for retry."
+    CLEANUP_FAILED=1
+  elif nft list table ip "$NFT_TABLE" >/dev/null 2>&1; then
+    if ! nft delete table ip "$NFT_TABLE"; then
+      warn "could not remove nftables table $NFT_TABLE."
+      CLEANUP_FAILED=1
+    fi
+  fi
+
+  if ! command -v ip >/dev/null 2>&1; then
+    warn "ip is unavailable; cannot restore the USB interface."
+    CLEANUP_FAILED=1
+  elif ip -4 -o addr show dev "$USB_IFACE" 2>/dev/null | grep -Eq "inet ${SHARE_CIDR//./\\.}( |\$)"; then
+    if ! ip address del "$SHARE_CIDR" dev "$USB_IFACE"; then
+      warn "could not remove $SHARE_CIDR from $USB_IFACE."
+      CLEANUP_FAILED=1
+    fi
+  fi
+
+  if command -v ip >/dev/null 2>&1 && [[ $OLD_LINK_UP == 0 ]] && ip link show dev "$USB_IFACE" >/dev/null 2>&1; then
+    if ! ip link set dev "$USB_IFACE" down; then
+      warn "could not restore $USB_IFACE to its original down state."
+      CLEANUP_FAILED=1
+    fi
+  fi
+
+  if command -v sysctl >/dev/null 2>&1; then
+    current_forward=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || true)
+    if [[ $current_forward != "$OLD_FORWARD" ]] && ! sysctl -w "net.ipv4.ip_forward=$OLD_FORWARD" >/dev/null; then
+      warn "could not restore the original IPv4 forwarding setting."
+      CLEANUP_FAILED=1
+    fi
+  else
+    warn "sysctl is unavailable; cannot restore the IPv4 forwarding setting."
+    CLEANUP_FAILED=1
+  fi
+
+  if [[ $OLD_NM_MANAGED != unknown ]]; then
+    if ! command -v nmcli >/dev/null 2>&1; then
+      warn "nmcli is unavailable; cannot restore NetworkManager management state."
+      CLEANUP_FAILED=1
+    elif command -v ip >/dev/null 2>&1 && ip link show dev "$USB_IFACE" >/dev/null 2>&1; then
+      if ! nmcli device set "$USB_IFACE" managed "$OLD_NM_MANAGED"; then
+        warn "could not restore NetworkManager management state for $USB_IFACE."
+        CLEANUP_FAILED=1
+      fi
+    fi
+  fi
+
+  if (( CLEANUP_FAILED == 0 )); then
+    rm -f -- "$STATE_FILE" "$RUN_DIR/state.new" "$STATUS_FILE" "$STATUS_FILE.new" \
+      "$DNSMASQ_PIDFILE" "$RUN_DIR/dnsmasq.leases" "$RUN_DIR/dnsmasq.log" "$RUN_DIR/monitor.log"
+    rmdir --ignore-fail-on-non-empty "$RUN_DIR" 2>/dev/null || true
+    info "sharing stopped; host settings were restored."
+  else
+    fail "cleanup was incomplete. The saved state was kept; run '$APP stop' again after addressing the warnings."
+  fi
+}
+
+# Background watcher: stops sharing if the USB interface vanishes or loses
+# carrier for a sustained period. Runs without the start/stop lock held.
+monitor_share() {
+  local expected_session=$1 down_count=0 ticks=0 seen_up=0 carrier
+  require_root
+  [[ $expected_session =~ ^[[:alnum:]-]{1,64}$ ]] || fail "invalid monitor session."
+  while [[ -e $STATE_FILE ]]; do
+    read_state
+    [[ $SESSION_ID == "$expected_session" ]] || return 0
+
+    if ! ip link show dev "$USB_IFACE" >/dev/null 2>&1; then
+      info "USB interface $USB_IFACE disappeared; stopping sharing."
+      "$SCRIPT_PATH" stop
+      return 0
+    fi
+
+    # Reading carrier fails (EINVAL) while the link is administratively down;
+    # treat that as "unknown" rather than letting set -e kill the monitor.
+    carrier=unknown
+    if [[ -r /sys/class/net/$USB_IFACE/carrier ]]; then
+      { carrier=$(</sys/class/net/"$USB_IFACE"/carrier); } 2>/dev/null || carrier=unknown
+    fi
+
+    ticks=$((ticks + 1))
+    if [[ $carrier == 1 ]]; then
+      seen_up=1
+      down_count=0
+    elif [[ $carrier == 0 ]] && (( seen_up == 1 || ticks > MONITOR_GRACE_TICKS )); then
+      down_count=$((down_count + 1))
+    else
+      down_count=0
+    fi
+
+    if (( down_count >= MONITOR_DOWN_LIMIT )); then
+      info "USB interface $USB_IFACE has reported no carrier for 30 seconds; stopping sharing."
+      "$SCRIPT_PATH" stop
+      return 0
+    fi
+    sleep 2
+  done
+}
+
+rollback_start() {
+  local status=$?
+  trap - EXIT
+  if (( START_COMPLETE == 0 )) && [[ -f $STATE_FILE ]]; then
+    warn "startup failed; rolling back changes."
+    # Subshell: stop_locked reports problems via fail(), which exits.
+    if ( stop_locked ); then :; else warn "automatic rollback was incomplete; run '$APP stop' as root."; fi
+  fi
+  exit "$status"
+}
+
+check_preconditions() {
+  require_commands
+  load_config
+  select_interfaces
+  check_network_available
+  if [[ -n $(ip -4 -o addr show dev "$USB_IFACE") ]]; then
+    fail "$USB_IFACE already has an IPv4 address. Disconnect its existing connection or configure NetworkManager to leave the interface unused."
+  fi
+  info "USB interface: $USB_IFACE"
+  info "Internet uplink: $UPSTREAM_IFACE"
+  info "Shared subnet: $SHARE_NETWORK"
+  info "preflight passed; this does not verify Android reverse-tether support."
+}
+
+start_share() {
+  local link_line managed attempt monitor_pid
+  require_root
+  acquire_lock
+  [[ ! -e $STATE_FILE ]] || fail "sharing is already active; run '$APP stop' first if cleanup is needed."
+  require_commands
+  load_config
+  select_interfaces
+  check_network_available
+
+  [[ -z $(ip -4 -o addr show dev "$USB_IFACE") ]] || fail "$USB_IFACE already has an IPv4 address. Disconnect its existing connection or configure NetworkManager to leave the interface unused."
+  nft list table ip "$NFT_TABLE" >/dev/null 2>&1 && fail "nftables table $NFT_TABLE already exists but is not owned by this service; refusing to change it."
+
+  link_line=$(ip -o link show dev "$USB_IFACE") || fail "cannot inspect $USB_IFACE."
+  if [[ $link_line == *",UP,"* || $link_line == *",UP>"* || $link_line == *"<UP>"* ]]; then
+    OLD_LINK_UP=1
+  else
+    OLD_LINK_UP=0
+  fi
+  OLD_FORWARD=$(sysctl -n net.ipv4.ip_forward) || fail "cannot read net.ipv4.ip_forward."
+  [[ $OLD_FORWARD == 0 || $OLD_FORWARD == 1 ]] || fail "unexpected value for net.ipv4.ip_forward: $OLD_FORWARD."
+  SESSION_ID=$(</proc/sys/kernel/random/uuid) || fail "cannot create a session identifier."
+
+  if command -v nmcli >/dev/null 2>&1; then
+    managed=$(nmcli -g GENERAL.MANAGED device show "$USB_IFACE" 2>/dev/null || true)
+    case "$managed" in
+      yes|no) OLD_NM_MANAGED=$managed ;;
+      *) OLD_NM_MANAGED=unknown ;;
+    esac
+  fi
+
+  # 0755 so dnsmasq can reach its lease/log files after dropping privileges;
+  # the state file inside stays 0600 root-only.
+  mkdir -p "$RUN_DIR"
+  chmod 0755 "$RUN_DIR"
+  save_state
+  trap rollback_start EXIT
+  write_status starting
+
+  if [[ $OLD_NM_MANAGED == yes ]]; then
+    nmcli device set "$USB_IFACE" managed no || fail "NetworkManager could not release $USB_IFACE."
+  fi
+
+  ip link set dev "$USB_IFACE" up || fail "could not bring up $USB_IFACE."
+  ip address add "$SHARE_CIDR" dev "$USB_IFACE" || fail "could not assign $SHARE_CIDR to $USB_IFACE."
+
+  # Policy accept leaves unrelated forwarding (Docker, libvirt, ...) alone.
+  # Only traffic entering or leaving the USB interface is restricted.
+  nft add table ip "$NFT_TABLE" || fail "could not create the nftables table."
+  nft add chain ip "$NFT_TABLE" forward '{ type filter hook forward priority -5; policy accept; }' || fail "could not create the forwarding chain."
+  nft add chain ip "$NFT_TABLE" postrouting '{ type nat hook postrouting priority srcnat; policy accept; }' || fail "could not create the NAT chain."
+  nft add rule ip "$NFT_TABLE" forward iifname "$USB_IFACE" oifname "$UPSTREAM_IFACE" ip saddr "$SHARE_NETWORK" accept || fail "could not add the USB-to-uplink forwarding rule."
+  nft add rule ip "$NFT_TABLE" forward iifname "$UPSTREAM_IFACE" oifname "$USB_IFACE" ip daddr "$SHARE_NETWORK" ct state established,related accept || fail "could not add the return-traffic forwarding rule."
+  nft add rule ip "$NFT_TABLE" forward iifname "$USB_IFACE" drop || fail "could not add the USB ingress drop rule."
+  nft add rule ip "$NFT_TABLE" forward oifname "$USB_IFACE" drop || fail "could not add the USB egress drop rule."
+  nft add rule ip "$NFT_TABLE" postrouting oifname "$UPSTREAM_IFACE" ip saddr "$SHARE_NETWORK" masquerade || fail "could not add the NAT rule."
+
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null || fail "could not enable IPv4 forwarding."
+
+  # Close the lock fd (9>&-) so the long-lived child does not keep the
+  # start/stop lock held after this command returns.
+  nohup dnsmasq \
+    --no-daemon \
+    --conf-file=/dev/null \
+    --no-hosts \
+    --dhcp-authoritative \
+    --interface="$USB_IFACE" \
+    --bind-interfaces \
+    --pid-file="$DNSMASQ_PIDFILE" \
+    --dhcp-leasefile="$RUN_DIR/dnsmasq.leases" \
+    --dhcp-range="$DHCP_START,$DHCP_END,255.255.255.0,12h" \
+    --dhcp-option="option:router,$SHARE_ADDRESS" \
+    --dhcp-option="option:dns-server,$SHARE_ADDRESS" \
+    --log-facility="$RUN_DIR/dnsmasq.log" </dev/null >/dev/null 2>&1 9>&- &
+  DNSMASQ_PID=$!
+  save_state
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    if ! kill -0 "$DNSMASQ_PID" 2>/dev/null; then
+      cat "$RUN_DIR/dnsmasq.log" >&2 2>/dev/null || true
+      fail "dnsmasq exited during startup. Check for a DNS port conflict or DHCP configuration issue."
+    fi
+    sleep 0.1
+  done
+
+  nohup "$SCRIPT_PATH" monitor "$SESSION_ID" </dev/null >"$RUN_DIR/monitor.log" 2>&1 9>&- &
+  monitor_pid=$!
+  sleep 0.2
+  kill -0 "$monitor_pid" 2>/dev/null || fail "could not start the USB disconnect monitor."
+
+  write_status active
+  START_COMPLETE=1
+  trap - EXIT
+  info "sharing is active: $USB_IFACE ($SHARE_NETWORK) -> $UPSTREAM_IFACE."
+  info "automatic cleanup watches for interface removal or sustained USB carrier loss."
+  info "connect a phone that supports USB reverse tethering and obtains its address by DHCP."
+}
+
+stop_share() {
+  require_root
+  acquire_lock
+  if [[ ! -e $STATE_FILE ]]; then
+    rm -f -- "$STATUS_FILE"
+    info "sharing is not active."
+    return 0
+  fi
+  stop_locked
+}
+
+toggle_share() {
+  if [[ -e $STATE_FILE ]]; then stop_share; else start_share; fi
+}
+
+status_share() {
+  local status=inactive
+  if [[ -f $STATUS_FILE ]]; then
+    status=$(<"$STATUS_FILE")
+    [[ $status == starting || $status == active ]] || status=inactive
+  fi
+  info "$status"
+}
+
+main() {
+  case "${1:-help}" in
+    start) (( $# == 1 )) || fail "start takes no options."; start_share ;;
+    stop) (( $# == 1 )) || fail "stop takes no options."; stop_share ;;
+    toggle) (( $# == 1 )) || fail "toggle takes no options."; toggle_share ;;
+    status) (( $# == 1 )) || fail "status takes no options."; status_share ;;
+    check) (( $# == 1 )) || fail "check takes no options."; check_preconditions ;;
+    monitor) (( $# == 2 )) || fail "invalid monitor invocation."; monitor_share "$2" ;;
+    help|-h|--help) (( $# == 1 )) || fail "help takes no options."; usage ;;
+    *) usage >&2; fail "unknown action '$1'." ;;
+  esac
+}
+
+# Allow tests to source this file without running main.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

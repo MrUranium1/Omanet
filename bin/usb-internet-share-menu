@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP=usb-internet-share
+CLI=$(command -v usb-internet-share || true)
+if [[ -z $CLI ]]; then
+  notify-send "USB Internet Share" "The command usb-internet-share is not installed." 2>/dev/null || true
+  exit 1
+fi
+
+command -v notify-send >/dev/null 2>&1 || {
+  printf 'USB Internet Share: install libnotify for desktop notifications.\n' >&2
+}
+
+if command -v rofi >/dev/null 2>&1; then
+  MENU=(rofi -dmenu -i -p "USB Internet Share")
+elif command -v wofi >/dev/null 2>&1; then
+  MENU=(wofi --dmenu --prompt "USB Internet Share")
+else
+  notify-send "USB Internet Share" "Install rofi or wofi to use the graphical toggle." 2>/dev/null || true
+  exit 1
+fi
+
+status=$("$CLI" status)
+case "$status" in
+  "$APP: active")
+    choices=$'Stop sharing\nCancel'
+    action=stop
+    ;;
+  "$APP: starting")
+    choices=$'Sharing is starting; try again shortly.\nCancel'
+    action=
+    ;;
+  *)
+    choices=$'Start sharing\nCancel'
+    action=start
+    ;;
+esac
+
+selection=$(printf '%s\n' "$choices" | "${MENU[@]}" || true)
+[[ $selection == "Start sharing" || $selection == "Stop sharing" ]] || exit 0
+
+if ! command -v pkexec >/dev/null 2>&1; then
+  notify-send "USB Internet Share" "pkexec is required for the graphical toggle. You can also run sudo $APP $action in a terminal." 2>/dev/null || true
+  exit 1
+fi
+
+if pkexec "$CLI" "$action"; then
+  notify-send "USB Internet Share" "$([[ $action == start ]] && printf 'Sharing started.' || printf 'Sharing stopped.')" 2>/dev/null || true
+else
+  notify-send "USB Internet Share" "Could not $action sharing. Check the authentication prompt and run '$APP status' for details." 2>/dev/null || true
+  exit 1
+fi
