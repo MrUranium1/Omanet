@@ -111,6 +111,8 @@ BarWidget {
         bar: root.bar
         text: "\uf287"
         active: root.sharing
+        activeColor: root.fg
+        foreground: root.sharing ? root.fg : Qt.darker(root.fg, 1.7)
         tooltipText: "OmaNet — " + root.stateLabel()
 
         onPressed: function(mouseButton) {
